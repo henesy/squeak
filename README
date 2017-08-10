@@ -1,0 +1,11 @@
+A Port of a Language for Communicating with Mice.
+
+Modifications applied for squeak to run on 9Front.
+
+Run via: `run_squeak`
+­ 
+Squeak Smalltalk programming environment
+
+Smalltalk from Squeak4.5 with VMMaker 4.13.6.
+
+Port by Alex Franchuk <alex.franchuk@gmail.com>
