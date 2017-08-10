@@ -1,0 +1,315 @@
+/*
+ * Squeak IO function implementations for Plan9.
+ *
+ * Author: Alex Franchuk (alex.franchuk@gmail.com)
+ */
+
+#include "sq.h"
+#include "p9iface.h"
+
+#define _PLAN9_SOURCE
+
+#define EVT_BUFFER_SIZE 256
+
+#include <u.h>
+#include <draw.h>
+#include <event.h>
+#include <cursor.h>
+#include <stdio.h>
+#include <sys/time.h>
+#include <unistd.h>
+
+static struct timeval start_time;
+static Point          mouse_position;
+static int            mouse_button_state = 0;
+static sqInputEvent   evts[EVT_BUFFER_SIZE];
+static int 			  evts_start = 0,
+					  evts_end = 0;
+static int            disp_prev_width,
+					  disp_prev_height,
+					  disp_prev_x,
+					  disp_prev_y;
+static int            event_semaphore_index;
+
+int timeInit(void) {
+	return gettimeofday(&start_time, 0);
+}
+
+/* Time */
+sqInt ioMSecs(void) {
+	struct timeval now;
+	gettimeofday(&now, 0);
+
+	if ((now.tv_usec -= start_time.tv_usec) < 0) {
+	now.tv_usec += 1000000;
+	now.tv_sec -= 1;
+	}
+	now.tv_sec -= start_time.tv_sec;
+	return (now.tv_usec / 1000 + now.tv_sec * 1000);
+}
+
+sqInt ioMicroMSecs(void) {
+	return ioMSecs();
+}
+
+/*sqLong ioMicroSeconds(void) {*/
+	/*return 0;*/
+/*}*/
+
+/*sqInt ioUtcWithOffset(sqLong*, int*) {*/
+	/*return 0;*/
+/*}*/
+
+sqInt ioSeconds(void) {
+	return 0;
+}
+
+/* Miscellaneous */
+sqInt ioBeep(void) {
+	printf("beep\n");
+	return 0;
+}
+
+sqInt ioExit(void) {
+	return ioExitWithErrorCode(0);
+}
+
+sqInt ioExitWithErrorCode(int code) {
+	printf("exit %d\n",code);
+	return 0;
+}
+
+sqInt ioRelinquishProcessorForMicroseconds(sqInt microSeconds) {
+	return 0;
+}
+
+sqInt ioDisablePowerManager(sqInt disableIfNonZero) {
+	return true;
+}
+
+/* Display */
+sqInt ioForceDisplayUpdate(void) {
+	return true;
+}
+
+sqInt ioFormPrint(sqInt bitsAddr, sqInt width, sqInt height, sqInt depth,
+		  double hScale, double vScale, sqInt landscapeFlag) {
+	return 0;
+}
+
+sqInt ioSetFullScreen(sqInt fullScreen) {
+	if (fullScreen) {
+		ushort w = screen->r.max.x - screen->r.min.x;
+		ushort h = screen->r.max.y - screen->r.min.y;
+		disp_prev_x = screen->r.min.x;
+		disp_prev_y = screen->r.min.y;
+		disp_prev_width = w;
+		disp_prev_height = h;
+	}
+	else {
+		positionWindow(disp_prev_x, disp_prev_y);
+	}
+	return ioSetDisplayMode(disp_prev_width, disp_prev_height, screen->depth, fullScreen);
+}
+
+sqInt ioScreenSize(void) {
+	ushort w = screen->r.max.x - screen->r.min.x;
+	ushort h = screen->r.max.y - screen->r.min.y;
+	return (w<<16)|h;
+}
+
+sqInt ioScreenDepth(void) {
+	return 32;
+}
+
+sqInt ioSetCursor(sqInt cursorBitsIndex, sqInt offsetX, sqInt offsetY) {
+	printf("setcursor\n");
+	return 0;
+}
+
+sqInt ioSetCursorWithMask(sqInt cursorBitsIndex, sqInt cursorMaskIndex, sqInt offsetX, sqInt offsetY) {
+	return 0;
+}
+
+sqInt ioSetCursorARGB(sqInt cursorBitsIndex, sqInt extentX, sqInt extentY, sqInt offsetX, sqInt offsetY) {
+	return 0;
+}
+
+static void sqToP9Bits(uchar* sqBits, uchar* p9Bits, int width, int height) {
+	for (int y = 0; y < height; y++)
+		for (int x = 0; x < width; x++) {
+			p9Bits[(y*width+x)*3] = sqBits[(y*width+x)*4+2];
+			p9Bits[(y*width+x)*3+1] = sqBits[(y*width+x)*4+1];
+			p9Bits[(y*width+x)*3+2] = sqBits[(y*width+x)*4];
+		}
+}
+
+sqInt ioShowDisplay(sqInt dispBitsIndex, sqInt width, sqInt height, sqInt depth,
+		    sqInt affectedL, sqInt affectedR, sqInt affectedT, sqInt affectedB) {
+	Rectangle r;
+	r.min.x = affectedL;
+	r.max.x = affectedR;
+	r.min.y = affectedT;
+	r.max.y = affectedB;
+	ulong chan;
+	uchar* dispBits = (uchar*)pointerForOop(dispBitsIndex);
+	uchar* buf = (uchar*)malloc(width*height*3);
+	if (buf == 0)
+		return 0;
+
+	sqToP9Bits(dispBits, buf, width, height);
+
+	switch (depth) {
+		case 1:
+			chan = GREY1;
+			break;
+		case 2:
+			chan = GREY2;
+			break;
+		case 4:
+			chan = CMAP8;
+			break;
+		case 8:
+			chan = CMAP8;
+			break;
+		case 16:
+			chan = RGB16;
+			break;
+		case 32:
+			chan = RGB24;
+			break;
+		default:
+			return -1;
+	}
+	Image* s = allocimage(display, r, chan, 0, DNofill);
+	if (s == 0) {
+		return -1;
+	}
+	Image* mask = allocimage(display, r, chan, 0, DOpaque);
+	if (mask == 0) {
+		freeimage(s);
+		return -1;
+	}
+
+	//Offset by one to make _rgb become rgba
+	loadimage(s, r, buf, width*height*4);
+
+	Point e; e.x = -r.min.x; e.y = -r.min.y;
+	draw(screen, screen->r, s, mask, e);
+
+	freeimage(mask);
+	freeimage(s);
+
+	free(buf);
+
+	return 1;
+}
+
+sqInt ioHasDisplayDepth(sqInt depth) {
+	if (depth == 32)
+		return 1;
+	else return 0;
+}
+
+sqInt ioSetDisplayMode(sqInt width, sqInt height, sqInt depth, sqInt fullscreenFlag) {
+	if (fullscreenFlag) {
+		Rectangle ssize = display->image->r;
+		positionWindow(ssize.min.x,ssize.min.y);
+		width = ssize.max.x - ssize.min.x - 1;
+		height = ssize.max.y - ssize.min.y - 1;
+	}
+	resizeWindow(width,height);
+	eresized(1);
+	return 0;
+}
+
+/* Mouse/Keyboard */
+sqInt ioGetButtonState(void) {
+	int left = mouse_button_state & 1;
+	int middle = (mouse_button_state & 2) >> 1;
+	int right = (mouse_button_state & 4) >> 2;
+	return RedButtonBit*left | YellowButtonBit*middle | BlueButtonBit*right;
+}
+
+sqInt ioMousePoint(void) {
+	return ((mouse_position.x & 0xFFFF) << 16) | (mouse_position.y & 0xFFFF);
+}
+
+sqInt ioGetKeystroke(void) {
+	int k = evts_start;
+	while (k < evts_end) {
+		if (evts[k].type == EventTypeKeyboard) {
+			evts_start = (k+1) % EVT_BUFFER_SIZE;
+			return ((sqKeyboardEvent)evts[k]).charCode;
+		}
+		k = (k+1) % EVT_BUFFER_SIZE;
+	}
+	return 0;
+}
+
+sqInt ioPeekKeystroke(void) {
+	int k = evts_start;
+	while (k < evts_end) {
+		if (evts[k].type == EventTypeKeyboard) {
+			return ((sqKeyboardEvent)evts[k]).charCode;
+		}
+		k = (k+1) % EVT_BUFFER_SIZE;
+	}
+	return 0;
+}
+
+sqInt ioProcessEvents(void) {
+	while (ecanmouse() || ecankbd()) {
+		Event e;
+		int key = event(&e);
+		if (key & Emouse) {
+			//Process mouse event
+			mouse_position.x = e.mouse.xy.x - screen->r.min.x;
+			mouse_position.y = e.mouse.xy.y - screen->r.min.y;
+			mouse_button_state = e.mouse.buttons;
+			if ((evts_end+2)%EVT_BUFFER_SIZE != evts_start) {
+				sqMouseEvent* evt = (sqMouseEvent*)&evts[evts_end++];
+				evt->type = EventTypeMouse;
+				evt->timeStamp = ioMSecs();
+				evt->x = mouse_position.x;
+				evt->y = mouse_position.y;
+				evt->buttons = ioGetButtonState();
+				evt->modifiers = 0;
+			}
+			signalSemaphoreWithIndex(event_semaphore_index);
+		}
+		if (key & Ekeyboard) {
+			//Process keyboard event
+			if ((evts_end+2)%EVT_BUFFER_SIZE != evts_start) {
+				sqKeyboardEvent* evt = (sqKeyboardEvent*)&evts[evts_end++];
+				evt->type = EventTypeKeyboard;
+				evt->timeStamp = ioMSecs();
+				evt->charCode = e.kbdc;
+				evt->pressCode = EventKeyChar;
+				evt->modifiers = 0;
+			}
+			signalSemaphoreWithIndex(event_semaphore_index);
+		}
+	}
+	
+	return 0;
+}
+
+sqInt ioSetInputSemaphore(sqInt semaIndex) {
+	if (semaIndex == 0) {
+		success(0);
+	}
+	else {
+		event_semaphore_index = semaIndex;
+	}
+	return true;
+}
+
+sqInt ioGetNextEvent(sqInputEvent *evt) {
+	if (evts_start != evts_end) {
+		memcpy(evt, &evts[evts_start++], sizeof(sqInputEvent));
+		evts_start %= EVT_BUFFER_SIZE;
+		return true;
+	}
+	return false;
+}

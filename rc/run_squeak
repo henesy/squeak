@@ -1,0 +1,60 @@
+#!/bin/rc
+
+IMAGE_DIR=$home/lib/squeak_image
+SQUEAK=squeak
+SQUEAK_FTP=ftp.squeak.org
+MOUNT_PT=/n/squeak_ftp
+
+
+fn fetch_image {
+	# Open FTP connection
+	ftpfs -q -m $MOUNT_PT -a anonymous $SQUEAK_FTP
+
+	# Freshen files in directory
+	ls $MOUNT_PT/current_stable > /dev/null
+
+	echo Fetching files...
+
+	# Copy image file
+	img_file=`{ls $MOUNT_PT/current_stable | grep 'Squeak[0-9]+\.[0-9]+'}
+
+	cp $img_file $IMAGE_DIR
+
+	# Copy sources file
+	src_file=`{ls $MOUNT_PT/current_stable | grep 'SqueakV[0-9]+\.sources\.zip'}
+
+	cp $src_file $IMAGE_DIR
+
+	# Unzip files
+	echo Unpacking files...
+	cd $IMAGE_DIR
+	for(f in *.zip) {
+		unzip -f $f
+		rm $f
+	}
+	cd ..
+
+	# Close FTP connection
+	unmount $MOUNT_PT
+}
+
+mkdir -p $IMAGE_DIR
+
+# Check whether the image file already exists or not
+_img=`{ls $IMAGE_DIR | grep 'Squeak[0-9]+\.[0-9]+.*\.image'}
+
+if(~ $#_img 0) {
+	fetch_image
+	_img=`{ls $IMAGE_DIR | grep 'Squeak[0-9]+\.[0-9]+.*\.image'}
+
+	if(~ $#_img 0) {
+		echo Error fetching image
+		exit 'failure'
+	}
+}
+
+# Run Squeak.  Note that the current interpreter prepends the current working
+# directory to whatever pathame we give it.  This "helpful" behavior means that
+# we must give it a relative pathname and must run it from our home directory.
+_relative=`{echo $_img | sed 's@'^$home^'/@@'}
+@{ cd $home ; $SQUEAK $_relative }

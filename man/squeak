@@ -1,0 +1,21 @@
+.TH SQUEAK 1
+.SH NAME
+squeak \- start the Squeak interpreter
+.SH SYNOPSIS
+.B squeak
+.I image_file
+
+.B run_squeak
+.SH DESCRIPTION
+.I Squeak
+starts the Squeak interpreter, with 
+.I image_file
+as the main image. The directory of the
+.I image_file
+should also contain a changes file and a sources file which were downloaded with it.
+
+The
+.I run_squeak
+command will download the current stable Squeak image and sources files to $home/lib/squeak_image, and then invoke the interpreter appropriately. If image files already exist, the script will simply invoke the interpreter.
+.SH SOURCE
+.B /sys/src/cmd/squeak
